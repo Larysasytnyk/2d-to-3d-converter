@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>2D (PNG/SVG) в 3D Конвертер та Переглядач</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/SVGLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/exporters/STLExporter.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/exporters/GLTFExporter.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Inter', sans-serif; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100">
+
+    <div class="absolute top-4 left-4 z-10 bg-slate-800/90 backdrop-blur-md p-5 rounded-2xl shadow-2xl border border-slate-700 max-w-sm w-full">
+        <h1 class="text-xl font-bold mb-1 text-indigo-400">2D в 3D Конвертер</h1>
+        <p class="text-xs text-slate-400 mb-4">Формати: <span class="font-semibold text-slate-200">.PNG, .JPG, .SVG</span></p>
+        
+        <label class="flex flex-col items-center justify-center border-2 border-dashed border-indigo-500/50 hover:border-indigo-400 rounded-xl p-3 cursor-pointer bg-slate-900/50 transition-all hover:bg-slate-900 mb-4">
+            <svg class="w-7 h-7 text-indigo-400 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+            </svg>
+            <span class="text-xs font-medium text-slate-200">Оберіть або перетягніть файл</span>
+            <input type="file" id="fileInput" accept=".png,.jpg,.jpeg,.svg" class="hidden">
+        </label>
+
+        <div class="mb-4">
+            <div class="flex justify-between text-xs mb-1">
+                <span class="text-slate-300">Товщина (глибина 3D):</span>
+                <span id="depthVal" class="text-indigo-400 font-bold">10</span>
+            </div>
+            <input type="range" id="extrusionDepth" min="1" max="50" value="10" class="w-full accent-indigo-500 cursor-pointer">
+        </div>
+
+        <div class="grid grid-cols-2 gap-2 mb-3">
+            <button id="exportSTL" class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold py-2.5 px-3 rounded-xl transition-all shadow-lg shadow-indigo-600/30 disabled:opacity-40 disabled:cursor-not-allowed" disabled>
+                📥 Скачати .STL
+            </button>
+            <button id="exportGLB" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold py-2.5 px-3 rounded-xl transition-all shadow-lg shadow-emerald-600/30 disabled:opacity-40 disabled:cursor-not-allowed" disabled>
+                📥 Скачати .GLB
+            </button>
+        </div>
+
+        <div id="statusMessage" class="text-xs text-slate-400 text-center min-h-[20px]">
+            Очікування файлу...
+        </div>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <script>
+        let scene, camera, renderer, controls;
+        let currentModel = null;
+        let lastFileContent = null;
+        let lastFileType = null;
+
+        window.onload = function() {
+            initThreeJS();
+            setupUI();
+            window.addEventListener('resize', onWindowResize, false);
+        };
+
+        function initThreeJS() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0f172a);
+
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 0, 300);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+
+            scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
+            dirLight.position.set(100, 200, 200);
+            scene.add(dirLight);
+
+            const grid = new THREE.GridHelper(400, 40, 0x4f46e5, 0x334155);
+            grid.position.y = -50;
+            scene.add(grid);
+
+            animate();
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function setupUI() {
+            const fileInput = document.getElementById('fileInput');
+            const depthSlider = document.getElementById('extrusionDepth');
+            const depthVal = document.getElementById('depthVal');
+
+            depthSlider.addEventListener('input', function() {
+                depthVal.textContent = this.value;
+                if (lastFileContent) {
+                    processFile(lastFileContent, lastFileType, parseFloat(this.value));
+                }
+            });
+
+            fileInput.addEventListener('change', function(event) {
+                const file = event.target.files[0];
+                if (!file) return;
+
+                const fileName = file.name.toLowerCase();
+                lastFileType = fileName.endsWith('.svg') ? 'svg' : 'image';
+
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    lastFileContent = e.target.result;
+                    processFile(lastFileContent, lastFileType, parseFloat(depthSlider.value));
+                    
+                    document.getElementById('statusMessagetextContent = `Готово: ${file.name}`; // fixed typo
+                    document.getElementById('statusMessage').textContent = `Готово: ${file.name}`;
+                    document.getElementById('statusMessageclassName = "text-xs text-emerald-400 text-center";
+                    document.getElementById('statusMessage').className = "text-xs text-emerald-400 text-center";
+                    
+                    // Розблокування кнопок експорту
+                    document.getElementById('exportSTL').removeAttribute('disabled');
+                    document.getElementById('exportGLB').removeAttribute('disabled');
+                };
+
+                if (lastFileType === 'svg') {
+                    reader.readAsText(file);
+                } else {
+                    reader.readAsDataURL(file);
+                }
+            });
+
+            document.getElementById('exportSTL').addEventListener('click', exportToSTL);
+            document.getElementById('exportGLB').addEventListener('click', exportToGLB);
+        }
+
+        function processFile(content, type, depth) {
+            if (currentModel) scene.remove(currentModel);
+
+            if (type === 'svg') {
+                const loader = new THREE.SVGLoader();
+                const svgData = loader.parse(content);
+                const group = new THREE.Group();
+
+                svgData.paths.forEach((path) => {
+                    path.toShapes(true).forEach((shape) => {
+                        const geom = new THREE.ExtrudeGeometry(shape, { depth: depth, bevelEnabled: true, bevelSize: 1, bevelThickness: 1 });
+                        const mat = new THREE.MeshStandardMaterial({ color: path.colorStyle || 0x6366f1, side: THREE.DoubleSide });
+                        group.add(new THREE.Mesh(geom, mat));
+                    });
+                });
+                group.scale.y = -1;
+                finishModel(group);
+            } else {
+                new THREE.TextureLoader().load(content, function(texture) {
+                    const aspect = texture.image.width / texture.image.height;
+                    const w = 150, h = w / aspect;
+                    const geom = new THREE.BoxGeometry(w, h, depth);
+                    const materials = [
+                        new THREE.MeshStandardMaterial({ color: 0x334155 }),
+                        new THREE.MeshStandardMaterial({ color: 0x334155 }),
+                        new THREE.MeshStandardMaterial({ color: 0x334155 }),
+                        new THREE.MeshStandardMaterial({ color: 0x334155 }),
+                        new THREE.MeshStandardMaterial({ map: texture }),
+                        new THREE.MeshStandardMaterial({ color: 0x334155 })
+                    ];
+                    finishModel(new THREE.Mesh(geom, materials));
+                });
+            }
+        }
+
+        function finishModel(obj) {
+            currentModel = obj;
+            const box = new THREE.Box3().setFromObject(currentModel);
+            currentModel.position.sub(box.getCenter(new THREE.Vector3()));
+            scene.add(currentModel);
+
+            const size = box.getSize(new THREE.Vector3());
+            let dist = Math.max(size.x, size.y, size.z) * 2.5;
+            camera.position.set(0, 0, dist < 100 ? 150 : dist);
+            controls.target.set(0, 0, 0);
+            controls.update();
+        }
+
+        function exportToSTL() {
+            if (!currentModel) return;
+            const result = new THREE.STLExporter().parse(currentModel, { binary: true });
+            downloadBlob(new Blob([result], { type: 'application/octet-stream' }), 'model.stl');
+        }
+
+        function exportToGLB() {
+            if (!currentModel) return;
+            new THREE.GLTFExporter().parse(currentModel, function (gltf) {
+                downloadBlob(new Blob([gltf], { type: 'model/gltf-binary' }), 'model.glb');
+            }, { binary: true });
+        }
+
+        function downloadBlob(blob, filename) {
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = filename;
+            link.click();
+            URL.revokeObjectURL(link.href);
+        }
+    </script>
+</body>
+</html>
