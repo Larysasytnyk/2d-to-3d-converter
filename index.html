@@ -3,8 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>2D (PNG/SVG) в 3D Конвертер та Переглядач</title>
+    <title>2D (PNG/SVG) в 3D Конвертер</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Надійне підключення Three.js та компонентів зcdnjs -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/SVGLoader.js"></script>
@@ -88,3 +89,133 @@
             const grid = new THREE.GridHelper(400, 40, 0x4f46e5, 0x334155);
             grid.position.y = -50;
             scene.add(grid);
+
+            animate();
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function setupUI() {
+            const fileInput = document.getElementById('fileInput');
+            const depthSlider = document.getElementById('extrusionDepth');
+            const depthVal = document.getElementById('depthVal');
+
+            depthSlider.addEventListener('input', function() {
+                depthVal.textContent = this.value;
+                if (lastFileContent) {
+                    processFile(lastFileContent, lastFileType, parseFloat(this.value));
+                }
+            });
+
+            fileInput.addEventListener('change', function(event) {
+                const file = event.target.files[0];
+                if (!file) return;
+
+                const fileName = file.name.toLowerCase();
+                lastFileType = fileName.endsWith('.svg') ? 'svg' : 'image';
+
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    lastFileContent = e.target.result;
+                    processFile(lastFileContent, lastFileType, parseFloat(depthSlider.value));
+                    
+                    const status = document.getElementById('statusMessage');
+                    status.textContent = `Готово: ${file.name}`;
+                    status.className = "text-xs text-emerald-400 text-center min-h-[20px]";
+                    
+                    document.getElementById('exportSTL').removeAttribute('disabled');
+                    document.getElementById('exportGLB').removeAttribute('disabled');
+                };
+
+                if (lastFileType === 'svg') {
+                    reader.readAsText(file);
+                } else {
+                    reader.readAsDataURL(file);
+                }
+            });
+
+            document.getElementById('exportSTL').addEventListener('click', exportToSTL);
+            document.getElementById('exportGLB').addEventListener('click', exportToGLB);
+        }
+
+        function processFile(content, type, depth) {
+            if (currentModel) scene.remove(currentModel);
+
+            if (type === 'svg') {
+                const loader = new THREE.SVGLoader();
+                const svgData = loader.parse(content);
+                const group = new THREE.Group();
+
+                svgData.paths.forEach((path) => {
+                    path.toShapes(true).forEach((shape) => {
+                        const geom = new THREE.ExtrudeGeometry(shape, { depth: depth, bevelEnabled: true, bevelSize: 1, bevelThickness: 1 });
+                        const mat = new THREE.MeshStandardMaterial({ color: path.colorStyle || 0x6366f1, side: THREE.DoubleSide });
+                        group.add(new THREE.Mesh(geom, mat));
+                    });
+                });
+                group.scale.y = -1;
+                finishModel(group);
+            } else {
+                new THREE.TextureLoader().load(content, function(texture) {
+                    const aspect = texture.image.width / texture.image.height;
+                    const w = 150, h = w / aspect;
+                    const geom = new THREE.BoxGeometry(w, h, depth);
+                    const materials = [
+                        new THREE.MeshStandardMaterial({ color: 0x334155 }),
+                        new THREE.MeshStandardMaterial({ color: 0x334155 }),
+                        new THREE.MeshStandardMaterial({ color: 0x334155 }),
+                        new THREE.MeshStandardMaterial({ color: 0x334155 }),
+                        new THREE.MeshStandardMaterial({ map: texture }),
+                        new THREE.MeshStandardMaterial({ color: 0x334155 })
+                    ];
+                    finishModel(new THREE.Mesh(geom, materials));
+                });
+            }
+        }
+
+        function finishModel(obj) {
+            currentModel = obj;
+            const box = new THREE.Box3().setFromObject(currentModel);
+            currentModel.position.sub(box.getCenter(new THREE.Vector3()));
+            scene.add(currentModel);
+
+            const size = box.getSize(new THREE.Vector3());
+            let dist = Math.max(size.x, size.y, size.z) * 2.5;
+            camera.position.set(0, 0, dist < 100 ? 150 : dist);
+            controls.target.set(0, 0, 0);
+            controls.update();
+        }
+
+        function exportToSTL() {
+            if (!currentModel) return;
+            const result = new THREE.STLExporter().parse(currentModel, { binary: true });
+            downloadBlob(new Blob([result], { type: 'application/octet-stream' }), 'model.stl');
+        }
+
+        function exportToGLB() {
+            if (!currentModel) return;
+            new THREE.GLTFExporter().parse(currentModel, function (gltf) {
+                downloadBlob(new Blob([gltf], { type: 'model/gltf-binary' }), 'model.glb');
+            }, { binary: true });
+        }
+
+        function downloadBlob(blob, filename) {
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = filename;
+            link.click();
+            URL.revokeObjectURL(link.href);
+        }
+    </script>
+</body>
+</html>
